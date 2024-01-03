@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 // #include <omp.h>
@@ -20,9 +21,9 @@ static int test_decrypt_ctr(void);
 static int test_encrypt_ecb(void);
 static int test_decrypt_ecb(void);
 static void test_encrypt_ecb_verbose(void);
-
-
-int main(void)
+// static int encrypt_ecb(void);
+void read_file_size(char* filename, int *fsize, FILE** fd);
+int main(int argc, char **argv)
 {
     int exit;
 
@@ -37,14 +38,39 @@ int main(void)
     return 0;
 #endif
 
-    exit = test_encrypt_cbc() + test_decrypt_cbc() +
-	test_encrypt_ctr() + test_decrypt_ctr() +
-	test_decrypt_ecb() + test_encrypt_ecb();
-    test_encrypt_ecb_verbose();
+    if(argc != 2) {
+        printf("argc should be 2 instead of %d\n",argc);
+        return 1;
+    }
+    int fsize;
+    FILE* fd ;
+    read_file_size(argv[1],&fsize, &fd);
+    uint8_t *buffer = (uint8_t*) malloc(sizeof(uint8_t)*fsize);
+    printf("file size = %d bytes\n",fsize);
+
+    int tmp = fread(buffer, sizeof(__uint8_t), fsize, fd);
+    printf("successfully read %d bytes\n",tmp);
+    fclose(fd);
+    // exit = test_encrypt_cbc() + test_decrypt_cbc() +
+	// test_encrypt_ctr() + test_decrypt_ctr() +
+	// test_decrypt_ecb() + test_encrypt_ecb();
+    // test_encrypt_ecb_verbose();
     // exit = test_encrypt_ecb();
 
-    return exit;
+    // return exit;
 }
+void read_file_size(char* filename, int *fsize, FILE **fd){
+    *fd = fopen(filename,"rb");
+    if(*fd == NULL){
+        printf("Failed to open file\n");
+        exit(1);
+    }
+    
+    fseek(*fd,0,SEEK_END);
+    *fsize = ftell(*fd);
+    rewind(*fd);
+}
+
 
 
 // prints string as hex

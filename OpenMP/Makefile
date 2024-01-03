@@ -1,6 +1,6 @@
 CC:=gcc
 exe:=test
-obj:=test.o aes.o 
+obj:=test.o aes.o fileio
 CFLAGS = -lm -O3 -fopenmp
 # all:$(obj)
 #  $(CC) -o $(exe) $(obj)  
@@ -11,6 +11,8 @@ test: test.o aes.o
 # aes.o: aes.c aes.h
 # 	$(CC) -c aes.c
 
+fileio: fileio.c
+	$(CC) $(CFLAGS) $^ -o fileio
 %.o:%.c
 	$(CC) $(CFLAGS) -c $^ -o $@
 
