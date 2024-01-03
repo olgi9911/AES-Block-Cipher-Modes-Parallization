@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+// #include <omp.h>
 
 // Enable ECB, CTR and CBC mode. Note this can be done before including aes.h or at compile-time.
 // E.g. with GCC by using the -D flag: gcc -c aes.c -DCBC=0 -DCTR=1 -DECB=1
@@ -40,6 +41,7 @@ int main(void)
 	test_encrypt_ctr() + test_decrypt_ctr() +
 	test_decrypt_ecb() + test_encrypt_ecb();
     test_encrypt_ecb_verbose();
+    // exit = test_encrypt_ecb();
 
     return exit;
 }
@@ -123,8 +125,12 @@ static int test_encrypt_ecb(void)
     uint8_t in[]  = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
     struct AES_ctx ctx;
 
+    // double start, end;
+    // start = omp_get_wtime();
     AES_init_ctx(&ctx, key);
     AES_ECB_encrypt(&ctx, in);
+    // end = omp_get_wtime();
+    // printf("Work took %f seconds\n", end - start);
 
     printf("ECB encrypt: ");
 
