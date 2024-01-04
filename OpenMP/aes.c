@@ -553,13 +553,22 @@ static void InvShiftRows(state_t* state)
 }
 #endif // #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)
 
+double sb_start, sb_end, sb_sum=0.0,
+         ark_start, ark_end, ark_sum=0.0,
+         sr_start, sr_end, sr_sum=0.0,
+         mc_start, mc_end, mc_sum=0.0;
 // Cipher is the main function that encrypts the PlainText.
 static void Cipher(state_t* state, const uint8_t* RoundKey)
 {
   uint8_t round = 0;
-
+  /* Timing variables */
+  
   // Add the First round key to the state before starting the rounds.
+  ark_start = omp_get_wtime();
   AddRoundKey(0, state, RoundKey);
+  ark_end = omp_get_wtime();
+  ark_sum += ark_end - ark_start;
+  // printf("Work took %f seconds\n", ark_sum);
 
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
@@ -567,16 +576,34 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
   // Last one without MixColumns()
   for (round = 1; ; ++round)
   {
+    sb_start = omp_get_wtime();
     SubBytes(state);
+    sb_end = omp_get_wtime();
+    sb_sum += sb_end-sb_start;
+
+    sr_start = omp_get_wtime();
     ShiftRows(state);
+    sr_end = omp_get_wtime();
+    sr_sum += sr_end-sr_start;
+
     if (round == Nr) {
       break;
     }
+    mc_start = omp_get_wtime();
     MixColumns(state);
+    mc_end = omp_get_wtime();
+    mc_sum += mc_end-mc_start;
+
+    ark_start = omp_get_wtime();
     AddRoundKey(round, state, RoundKey);
+    ark_end = omp_get_wtime();
+    ark_sum += ark_end - ark_start;
   }
   // Add round key to last round
+  ark_start = omp_get_wtime();
   AddRoundKey(Nr, state, RoundKey);
+  ark_end = omp_get_wtime();
+  ark_sum += ark_end - ark_start;
 }
 
 #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)

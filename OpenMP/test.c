@@ -2,16 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-// #include <omp.h>
+#include <omp.h>
+#include <mpi.h>
 
 // Enable ECB, CTR and CBC mode. Note this can be done before including aes.h or at compile-time.
 // E.g. with GCC by using the -D flag: gcc -c aes.c -DCBC=0 -DCTR=1 -DECB=1
 #define CBC 1
 #define CTR 1
 #define ECB 1
-
+// #define PARALLEL_BLOCKS 1   // A flag, when defined, encrypt/decrypt the cipher blocks in parallel
 #include "aes.h"
-
+int rank=0, size;
 static void phex(uint8_t* str);
 static int test_encrypt_cbc(void);
 static int test_decrypt_cbc(void);
@@ -53,13 +54,21 @@ int main(int argc, char **argv)
         printf("argc should be 3 (./test input_file output_file) instead of %d\n",argc);
         return 1;
     }
+    /* MPI Initialization */
+#ifdef PARALLEL_BLOCKS
+    MPI_Init(&argc, &argv);
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+#endif
+    // printf("Rank %d/%d\n", rank, size);
+    
     int fsize, Nstate, Npad; // fsize: number of bytes of the file; Nstate: number of states (cypher blocks); Npad: number of padding (bytes) 
     FILE* fd ;
     read_file_size(argv[1],&fsize, &fd);
     Nstate = (fsize+AES_BLOCKLEN-1)/AES_BLOCKLEN;   // ceil(fsize/AES_BLOCKLEN)
     Npad = Nstate*AES_BLOCKLEN-fsize;               // Number of bytes we need to pad
     uint8_t *buffer = (uint8_t*) malloc(sizeof(uint8_t)*Nstate*AES_BLOCKLEN);
-    printf("file size = %d bytes\n",fsize);
+    if(rank == 0) printf("file size = %d bytes\n",fsize);
     int tmp = fread(buffer, sizeof(uint8_t), fsize, fd);
     if(tmp != fsize) {
         printf("Failed to read file\n");
@@ -71,28 +80,48 @@ int main(int argc, char **argv)
         for(int i=fsize;i<Nstate*AES_BLOCKLEN;i++) buffer[i] = Npad;
     }
 
+    
+    exit = encrypt(buffer, Nstate, "ECB");
+    // exit = decrypt(buffer, Nstate, "ECB");
+    file_output(buffer, Nstate*AES_BLOCKLEN, argv[2]);
+
+    free(buffer);
+#ifdef PARALLEL_BLOCKS
+    MPI_Finalize();
+#endif
     // exit = test_encrypt_cbc() + test_decrypt_cbc() +
 	// test_encrypt_ctr() + test_decrypt_ctr() +
 	// test_decrypt_ecb() + test_encrypt_ecb();
     // test_encrypt_ecb_verbose();
-    // exit = test_encrypt_ecb();
-    exit = encrypt(buffer, Nstate, "ECB");
-    exit = decrypt(buffer, Nstate, "ECB");
-    file_output(buffer, Nstate*AES_BLOCKLEN, argv[2]);
-
-    free(buffer);
-    // return exit;
+    // // exit = test_encrypt_ecb();
+    // extern double ark_sum, sb_sum, sr_sum, mc_sum;
+    // printf("Total Time (s): %f\n\
+    //         Add Round Key:  %f\n\
+    //         Sub Bytes:      %f\n\
+    //         Mix Column:     %f\n\
+    //         Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
+    return exit;
 }
 
 static int encrypt(uint8_t *buffer,int Nstate, char* mode){
     uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+    extern double ark_sum, sb_sum, sr_sum, mc_sum;
     if(strcmp(mode, "ECB") == 0){
         printf("Encrypt in ECB\n");
         struct AES_ctx ctx;
         AES_init_ctx(&ctx, key);
+#ifdef PARALLEL_BLOCKS
+        for(int i=rank;i<Nstate;i+=size){
+#else
         for(int i=0;i<Nstate;i++){
+#endif
             AES_ECB_encrypt(&ctx, buffer+i*AES_BLOCKLEN);
         }
+        printf("Total Time (s): %f\n\
+                Add Round Key:  %f\n\
+                Sub Bytes:      %f\n\
+                Mix Column:     %f\n\
+                Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
         printf("Finish ECB encryption\n");
         return 0;
     }
@@ -104,8 +133,14 @@ static int decrypt(uint8_t *buffer,int Nstate, char* mode){
     if(strcmp(mode, "ECB") == 0){
         printf("Decrypt in ECB\n");
         struct AES_ctx ctx;
+
         AES_init_ctx(&ctx, key);
+#ifdef PARALLEL_BLOCKS
+        for(int i=rank;i<Nstate;i+=size){
+#else
         for(int i=0;i<Nstate;i++){
+#endif
+        
             AES_ECB_decrypt(&ctx, buffer+i*AES_BLOCKLEN);
         }
         printf("Finish ECB decryption\n");

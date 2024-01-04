@@ -1,4 +1,4 @@
-CC:=gcc
+CC:=mpicc
 exe:=test
 obj:=test.o aes.o fileio
 CFLAGS = -lm -O3 -fopenmp
