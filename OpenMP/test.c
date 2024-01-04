@@ -12,7 +12,6 @@
 
 #include "aes.h"
 
-
 static void phex(uint8_t* str);
 static int test_encrypt_cbc(void);
 static int test_decrypt_cbc(void);
@@ -21,8 +20,20 @@ static int test_decrypt_ctr(void);
 static int test_encrypt_ecb(void);
 static int test_decrypt_ecb(void);
 static void test_encrypt_ecb_verbose(void);
-// static int encrypt_ecb(void);
+static int encrypt(uint8_t *buffer,int Nstate, char* mode);
+static int decrypt(uint8_t *buffer,int Nstate, char* mode);
+int file_output(uint8_t* buffer, int fsize, char* filename);
 void read_file_size(char* filename, int *fsize, FILE** fd);
+uint8_t** map_data_to_states(uint8_t* buffer, int fsize, int Nstate);
+static void pstate(uint8_t* state){
+  for (int i = 0; i < 4; i++){
+    for(int j=0;j<4;j++){
+      printf("%.2x",state[i*4+j]);
+    }
+    printf("\n");
+  }
+  printf("\n");
+}
 int main(int argc, char **argv)
 {
     int exit;
@@ -38,27 +49,83 @@ int main(int argc, char **argv)
     return 0;
 #endif
 
-    if(argc != 2) {
-        printf("argc should be 2 instead of %d\n",argc);
+    if(argc != 3) {
+        printf("argc should be 3 (./test input_file output_file) instead of %d\n",argc);
         return 1;
     }
-    int fsize;
+    int fsize, Nstate, Npad; // fsize: number of bytes of the file; Nstate: number of states (cypher blocks); Npad: number of padding (bytes) 
     FILE* fd ;
     read_file_size(argv[1],&fsize, &fd);
-    uint8_t *buffer = (uint8_t*) malloc(sizeof(uint8_t)*fsize);
+    Nstate = (fsize+AES_BLOCKLEN-1)/AES_BLOCKLEN;   // ceil(fsize/AES_BLOCKLEN)
+    Npad = Nstate*AES_BLOCKLEN-fsize;               // Number of bytes we need to pad
+    uint8_t *buffer = (uint8_t*) malloc(sizeof(uint8_t)*Nstate*AES_BLOCKLEN);
     printf("file size = %d bytes\n",fsize);
-
-    int tmp = fread(buffer, sizeof(__uint8_t), fsize, fd);
-    printf("successfully read %d bytes\n",tmp);
+    int tmp = fread(buffer, sizeof(uint8_t), fsize, fd);
+    if(tmp != fsize) {
+        printf("Failed to read file\n");
+        return 1;
+    }
     fclose(fd);
+    /* padding */
+    if(Nstate*AES_BLOCKLEN > fsize){
+        for(int i=fsize;i<Nstate*AES_BLOCKLEN;i++) buffer[i] = Npad;
+    }
+
     // exit = test_encrypt_cbc() + test_decrypt_cbc() +
 	// test_encrypt_ctr() + test_decrypt_ctr() +
 	// test_decrypt_ecb() + test_encrypt_ecb();
     // test_encrypt_ecb_verbose();
     // exit = test_encrypt_ecb();
+    exit = encrypt(buffer, Nstate, "ECB");
+    exit = decrypt(buffer, Nstate, "ECB");
+    file_output(buffer, Nstate*AES_BLOCKLEN, argv[2]);
 
+    free(buffer);
     // return exit;
 }
+
+static int encrypt(uint8_t *buffer,int Nstate, char* mode){
+    uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+    if(strcmp(mode, "ECB") == 0){
+        printf("Encrypt in ECB\n");
+        struct AES_ctx ctx;
+        AES_init_ctx(&ctx, key);
+        for(int i=0;i<Nstate;i++){
+            AES_ECB_encrypt(&ctx, buffer+i*AES_BLOCKLEN);
+        }
+        printf("Finish ECB encryption\n");
+        return 0;
+    }
+    return 1;
+}
+
+static int decrypt(uint8_t *buffer,int Nstate, char* mode){
+    uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+    if(strcmp(mode, "ECB") == 0){
+        printf("Decrypt in ECB\n");
+        struct AES_ctx ctx;
+        AES_init_ctx(&ctx, key);
+        for(int i=0;i<Nstate;i++){
+            AES_ECB_decrypt(&ctx, buffer+i*AES_BLOCKLEN);
+        }
+        printf("Finish ECB decryption\n");
+        return 0;
+    }
+    return 1;
+}
+
+int file_output(uint8_t* buffer, int fsize, char* filename){
+    FILE *fd = fopen(filename, "wb");
+    int tmp = fwrite(buffer, sizeof(uint8_t), fsize, fd);
+    if(tmp == fsize) printf("successfully outputed file\n");
+    else             printf("Failed to output file\n");
+    return tmp;
+}
+
+
+/*
+ *   Read file 'filename', and update file size 'fsize' (bytes) and FILE* fd 
+ */
 void read_file_size(char* filename, int *fsize, FILE **fd){
     *fd = fopen(filename,"rb");
     if(*fd == NULL){
@@ -70,6 +137,7 @@ void read_file_size(char* filename, int *fsize, FILE **fd){
     *fsize = ftell(*fd);
     rewind(*fd);
 }
+
 
 
 
