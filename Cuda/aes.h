@@ -16,7 +16,7 @@
 #endif
 
 #ifndef ECB
-#define ECB 0
+#define ECB 1
 #endif
 
 #ifndef CTR
@@ -59,6 +59,8 @@ void AES_ctx_set_iv(struct AES_ctx* ctx, const uint8_t* iv);
 // NB: ECB is considered insecure for most uses
 void AES_ECB_encrypt(const struct AES_ctx* ctx, uint8_t* buf);
 void AES_ECB_decrypt(const struct AES_ctx* ctx, uint8_t* buf);
+void AES_ECB_encrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t length);
+void AES_ECB_decrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t length);
 
 #endif  // #if defined(ECB) && (ECB == !)
 
