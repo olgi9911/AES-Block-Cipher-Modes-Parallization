@@ -723,9 +723,9 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, size_t length)
       /* Increment Iv and handle overflow */
       for (bi = (AES_BLOCKLEN - 1); bi >= 0; --bi)
       {
-	/* inc will overflow */
+	      /* inc will overflow */
         if (ctx->Iv[bi] == 255)
-	{
+	      {
           ctx->Iv[bi] = 0;
           continue;
         } 
@@ -739,5 +739,31 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, size_t length)
   }
 }
 
+/* 
+  _p stands for parallel. This function encrypts the i'th cipher block of a series of blocks
+ */
+void AES_CTR_xcrypt_buffer_p(struct AES_ctx* ctx, uint8_t* buf, int idx)
+{
+  uint8_t buffer[AES_BLOCKLEN];
+  memcpy(buffer, ctx->Iv, AES_BLOCKLEN);
+
+  size_t i;
+  int bi, num = idx;
+  /* Increment Iv and handle overflow */
+  for (bi = (AES_BLOCKLEN - 1); bi >= 0; --bi)
+  {
+    int sum = buffer[bi] + num;
+    buffer[bi] = sum % 256;
+    num = sum / 256;
+    if (num < 1) {
+        break;
+    }
+  }
+  // bi = 0;
+  Cipher((state_t*)buffer,ctx->RoundKey);
+  for (i = 0; i < AES_BLOCKLEN; ++i){
+    buf[i] = (buf[i] ^ buffer[i]);
+  }
+}
 #endif // #if defined(CTR) && (CTR == 1)
 

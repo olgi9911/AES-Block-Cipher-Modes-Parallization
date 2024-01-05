@@ -4,15 +4,17 @@
 #include <stdint.h>
 #include <omp.h>
 #include <mpi.h>
+#include "aes.h"
 
 // Enable ECB, CTR and CBC mode. Note this can be done before including aes.h or at compile-time.
 // E.g. with GCC by using the -D flag: gcc -c aes.c -DCBC=0 -DCTR=1 -DECB=1
 #define CBC 1
 #define CTR 1
 #define ECB 1
-// #define PARALLEL_BLOCKS 1   // A flag, when defined, encrypt/decrypt the cipher blocks in parallel
-#include "aes.h"
-int rank=0, size;
+#define PARALLEL_BLOCKS 1   // A flag, when defined, encrypt/decrypt the cipher blocks in parallel
+// #define TEST_CORRECTNESS 1  // A flag which when defined, run the original correctness check on the AES instead of encrypting selected file
+
+int rank=0, size=1;
 static void phex(uint8_t* str);
 static int test_encrypt_cbc(void);
 static int test_decrypt_cbc(void);
@@ -21,8 +23,8 @@ static int test_decrypt_ctr(void);
 static int test_encrypt_ecb(void);
 static int test_decrypt_ecb(void);
 static void test_encrypt_ecb_verbose(void);
-static int encrypt(uint8_t *buffer,int Nstate, char* mode);
-static int decrypt(uint8_t *buffer,int Nstate, char* mode);
+static int encrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end);
+static int decrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end);
 int file_output(uint8_t* buffer, int fsize, char* filename);
 void read_file_size(char* filename, int *fsize, FILE** fd);
 uint8_t** map_data_to_states(uint8_t* buffer, int fsize, int Nstate);
@@ -35,11 +37,14 @@ static void pstate(uint8_t* state){
   }
   printf("\n");
 }
+
 int main(int argc, char **argv)
 {
+    double main_start,main_end;
+    main_start = omp_get_wtime();
     int exit;
 
-#if defined(AES256)
+/* #if defined(AES256)
     printf("\nTesting AES256\n\n");
 #elif defined(AES192)
     printf("\nTesting AES192\n\n");
@@ -48,8 +53,9 @@ int main(int argc, char **argv)
 #else
     printf("You need to specify a symbol between AES128, AES192 or AES256. Exiting");
     return 0;
-#endif
+#endif */
 
+#ifndef TEST_CORRECTNESS
     if(argc != 3) {
         printf("argc should be 3 (./test input_file output_file) instead of %d\n",argc);
         return 1;
@@ -60,50 +66,112 @@ int main(int argc, char **argv)
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 #endif
-    // printf("Rank %d/%d\n", rank, size);
+    if(rank==0) printf("# MPI Threads:%d\n", size);
     
     int fsize, Nstate, Npad; // fsize: number of bytes of the file; Nstate: number of states (cypher blocks); Npad: number of padding (bytes) 
     FILE* fd ;
     read_file_size(argv[1],&fsize, &fd);
     Nstate = (fsize+AES_BLOCKLEN-1)/AES_BLOCKLEN;   // ceil(fsize/AES_BLOCKLEN)
     Npad = Nstate*AES_BLOCKLEN-fsize;               // Number of bytes we need to pad
-    uint8_t *buffer = (uint8_t*) malloc(sizeof(uint8_t)*Nstate*AES_BLOCKLEN);
-    if(rank == 0) printf("file size = %d bytes\n",fsize);
+#ifdef PARALLEL_BLOCKS
+    // get_param is a function to calculate parameters used to distribute states evenly
+    // get_param{
+    int partition = Nstate/size; // partition: the number of entries each process should have, except for the last process
+    int remainder = Nstate%size;
+    int noSubArray, start, end; // noSubArray: the actual size of the sub array each process owns
+                                // start: the index of the start of the resposible partition
+                                // end: the index of the NEXT ELEMENT of the last responsible element. e.g. if responsible for element 0-5, start=0 and end=6
+    // Setting up parameters
+    if(rank < remainder) {
+        noSubArray = partition+1;
+        start = rank*noSubArray;
+        end = start + noSubArray;
+    } else {
+        noSubArray = partition;
+        start = remainder * (partition+1) + (rank-remainder)*partition;
+        end = start + noSubArray;
+    }
+    // }
+
+    printf("Rank %d: (%d,%d), total %d states\n", rank, start, end, noSubArray);
+#endif
+    uint8_t *buffer = (uint8_t*) calloc(Nstate*AES_BLOCKLEN,sizeof(uint8_t));
+    if(rank == 0) printf("file size = %d bytes, %d states\n",fsize,Nstate);
+
+    /* Read file into buffer */
+#ifdef PARALLEL_BLOCKS
+    fseek(fd, sizeof(uint8_t)*start*AES_BLOCKLEN, SEEK_SET);
+    int tmp = fread(buffer+start*AES_BLOCKLEN*sizeof(uint8_t), sizeof(uint8_t), noSubArray*AES_BLOCKLEN, fd);
+    // printf("RANK %d:", rank);
+    // for(int i=0;i<Nstate*AES_BLOCKLEN;i++){
+    //     printf("%.2x", buffer[i]);
+    // }
+    // printf("\n");
+
+    if(!feof(fd) && tmp != noSubArray*AES_BLOCKLEN) {
+        printf("Failed to read file\n");
+        return 1;
+    }
+#else
     int tmp = fread(buffer, sizeof(uint8_t), fsize, fd);
+
     if(tmp != fsize) {
         printf("Failed to read file\n");
         return 1;
     }
-    fclose(fd);
     /* padding */
     if(Nstate*AES_BLOCKLEN > fsize){
         for(int i=fsize;i<Nstate*AES_BLOCKLEN;i++) buffer[i] = Npad;
     }
 
+#endif
+    fclose(fd);
+
     
-    exit = encrypt(buffer, Nstate, "ECB");
-    // exit = decrypt(buffer, Nstate, "ECB");
+    
+    
+#ifdef PARALLEL_BLOCKS
+    // exit = encrypt(buffer, Nstate, "ECB", start, end);
+    // exit = decrypt(buffer, Nstate, "ECB", start, end);
+    exit = encrypt(buffer, Nstate, "CTR", start, end);
+    MPI_Barrier(MPI_COMM_WORLD);
+    exit = decrypt(buffer, Nstate, "CTR", start, end);
+    uint8_t *result = rank == 0 ? (uint8_t*) malloc(Nstate*AES_BLOCKLEN*sizeof(uint8_t)) : 0;
+    MPI_Reduce(buffer, result, Nstate*AES_BLOCKLEN, MPI_UINT8_T, MPI_SUM, 0, MPI_COMM_WORLD);
+    if(rank==0) file_output(result, Nstate*AES_BLOCKLEN, argv[2]);
+#else
+    // exit = encrypt(buffer, Nstate, "ECB", -1, -1);
+    // exit = decrypt(buffer, Nstate, "ECB", -1, -1);
+    exit = encrypt(buffer, Nstate, "CTR", -1, -1);
+    exit = decrypt(buffer, Nstate, "CTR", -1, -1);
     file_output(buffer, Nstate*AES_BLOCKLEN, argv[2]);
+#endif
+    
+    
 
     free(buffer);
 #ifdef PARALLEL_BLOCKS
+    if(rank == 0) free(result);
     MPI_Finalize();
 #endif
-    // exit = test_encrypt_cbc() + test_decrypt_cbc() +
-	// test_encrypt_ctr() + test_decrypt_ctr() +
-	// test_decrypt_ecb() + test_encrypt_ecb();
-    // test_encrypt_ecb_verbose();
-    // // exit = test_encrypt_ecb();
-    // extern double ark_sum, sb_sum, sr_sum, mc_sum;
-    // printf("Total Time (s): %f\n\
-    //         Add Round Key:  %f\n\
-    //         Sub Bytes:      %f\n\
-    //         Mix Column:     %f\n\
-    //         Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
+#else
+    exit = test_encrypt_cbc() + test_decrypt_cbc() +
+	test_encrypt_ctr() + test_decrypt_ctr() +
+	test_decrypt_ecb() + test_encrypt_ecb();
+    test_encrypt_ecb_verbose();
+    // exit = test_encrypt_ecb();
+    extern double ark_sum, sb_sum, sr_sum, mc_sum;
+    printf("Total Time (s): %f\n\
+            Add Round Key:  %f\n\
+            Sub Bytes:      %f\n\
+            Mix Column:     %f\n\
+            Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
+#endif
     return exit;
+
 }
 
-static int encrypt(uint8_t *buffer,int Nstate, char* mode){
+static int encrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end){
     uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
     extern double ark_sum, sb_sum, sr_sum, mc_sum;
     if(strcmp(mode, "ECB") == 0){
@@ -111,24 +179,40 @@ static int encrypt(uint8_t *buffer,int Nstate, char* mode){
         struct AES_ctx ctx;
         AES_init_ctx(&ctx, key);
 #ifdef PARALLEL_BLOCKS
-        for(int i=rank;i<Nstate;i+=size){
+        for(int i=start;i<end;i++){
 #else
         for(int i=0;i<Nstate;i++){
 #endif
-            AES_ECB_encrypt(&ctx, buffer+i*AES_BLOCKLEN);
+            AES_ECB_encrypt(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t));
         }
-        printf("Total Time (s): %f\n\
-                Add Round Key:  %f\n\
-                Sub Bytes:      %f\n\
-                Mix Column:     %f\n\
-                Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
-        printf("Finish ECB encryption\n");
-        return 0;
     }
-    return 1;
+    else if(strcmp(mode, "CTR") == 0){
+        printf("Encrypt in CTR\n");
+        uint8_t iv[16]  = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+        struct AES_ctx ctx;
+    
+        AES_init_ctx_iv(&ctx, key, iv);
+        
+#ifdef PARALLEL_BLOCKS
+        for(int i=start;i<end;i++){
+#else
+        for(int i=0;i<Nstate;i++){
+#endif
+            AES_CTR_xcrypt_buffer_p(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t), i);
+        }
+    }
+    else {return 1;}
+
+    printf("Total Time (s): %f\n\
+            Add Round Key:  %f\n\
+            Sub Bytes:      %f\n\
+            Mix Column:     %f\n\
+            Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
+    printf("Finish %s encryption\n",mode);
+    return 0;
 }
 
-static int decrypt(uint8_t *buffer,int Nstate, char* mode){
+static int decrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end){
     uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
     if(strcmp(mode, "ECB") == 0){
         printf("Decrypt in ECB\n");
@@ -136,23 +220,46 @@ static int decrypt(uint8_t *buffer,int Nstate, char* mode){
 
         AES_init_ctx(&ctx, key);
 #ifdef PARALLEL_BLOCKS
-        for(int i=rank;i<Nstate;i+=size){
+        for(int i=start;i<end;i++){
 #else
         for(int i=0;i<Nstate;i++){
 #endif
         
-            AES_ECB_decrypt(&ctx, buffer+i*AES_BLOCKLEN);
+            AES_ECB_decrypt(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t));
         }
         printf("Finish ECB decryption\n");
         return 0;
     }
-    return 1;
+    else if(strcmp(mode, "CTR") == 0){
+        printf("Decrypt in CTR\n");
+        uint8_t iv[16]  = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+        struct AES_ctx ctx;
+    
+        AES_init_ctx_iv(&ctx, key, iv);
+        
+#ifdef PARALLEL_BLOCKS
+        for(int i=start;i<end;i++){
+#else
+        for(int i=0;i<Nstate;i++){
+#endif
+            AES_CTR_xcrypt_buffer_p(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t), i);
+        }
+    }
+    else {return 1;}
+
+    // printf("Total Time (s): %f\n\
+    //         Add Round Key:  %f\n\
+    //         Sub Bytes:      %f\n\
+    //         Mix Column:     %f\n\
+    //         Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
+    printf("Finish %s decryption\n",mode);
+    return 0;
 }
 
 int file_output(uint8_t* buffer, int fsize, char* filename){
     FILE *fd = fopen(filename, "wb");
     int tmp = fwrite(buffer, sizeof(uint8_t), fsize, fd);
-    if(tmp == fsize) printf("successfully outputed file\n");
+    if(tmp == fsize) printf("Successfully outputed file\n");
     else             printf("Failed to output file\n");
     return tmp;
 }
