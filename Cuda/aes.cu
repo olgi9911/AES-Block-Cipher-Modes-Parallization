@@ -46,6 +46,8 @@ extern "C" {
 // The number of columns comprising a state in AES. This is a constant in AES. Value=4
 #define Nb 4
 
+#define THREADS_PER_BLOCK 512
+
 #if defined(AES256) && (AES256 == 1)
 #define Nk 8
 #define Nr 14
@@ -245,39 +247,54 @@ void AES_ctx_set_iv(struct AES_ctx* ctx, const uint8_t* iv) {
 // The round key is added to the state by an XOR function.
 __device__ static void AddRoundKey(uint8_t round, state_t* state, const uint8_t* RoundKey) {
     uint8_t i, j;
-    i = threadIdx.y;
-    j = threadIdx.x;
-    /*for (i = 0; i < 4; ++i) {
+    for (i = 0; i < 4; ++i) {
+#pragma unroll(4)
         for (j = 0; j < 4; ++j) {
             (*state)[i][j] ^= RoundKey[(round * Nb * 4) + (i * Nb) + j];
         }
-    }*/
-    (*state)[i][j] ^= RoundKey[(round * Nb * 4) + (i * Nb) + j];
+    }
 }
 
 // The SubBytes Function Substitutes the values in the
 // state matrix with values in an S-box.
 __device__ static void SubBytes(state_t* state) {
     uint8_t i, j;
-    j = threadIdx.y;
-    i = threadIdx.x;
-    /*for (i = 0; i < 4; ++i) {
+    for (i = 0; i < 4; ++i) {
+#pragma unroll(4)
         for (j = 0; j < 4; ++j) {
-            (*state)[j][i] = getSBoxValue((*state)[j][i]);
+            (*state)[i][j] = getSBoxValue((*state)[i][j]);
         }
-    }*/
-    (*state)[j][i] = getSBoxValue((*state)[j][i]);
+    }
 }
 
 // The ShiftRows() function shifts the rows in the state to the left.
 // Each row is shifted with different offset.
 // Offset = Row number. So the first row is not shifted.
-__device__ static void ShiftRows(state_t* state, state_t* original_state) {
-    uint8_t i, j;
-    i = threadIdx.x;
-    j = threadIdx.y;
+__device__ static void ShiftRows(state_t* state) {
+    uint8_t temp;
 
-    (*state)[j][i] = (*original_state)[(j + i) % 4][i];
+    // Rotate first row 1 columns to left
+    temp = (*state)[0][1];
+    (*state)[0][1] = (*state)[1][1];
+    (*state)[1][1] = (*state)[2][1];
+    (*state)[2][1] = (*state)[3][1];
+    (*state)[3][1] = temp;
+
+    // Rotate second row 2 columns to left
+    temp = (*state)[0][2];
+    (*state)[0][2] = (*state)[2][2];
+    (*state)[2][2] = temp;
+
+    temp = (*state)[1][2];
+    (*state)[1][2] = (*state)[3][2];
+    (*state)[3][2] = temp;
+
+    // Rotate third row 3 columns to left
+    temp = (*state)[0][3];
+    (*state)[0][3] = (*state)[3][3];
+    (*state)[3][3] = (*state)[2][3];
+    (*state)[2][3] = (*state)[1][3];
+    (*state)[1][3] = temp;
 }
 
 __device__ static uint8_t xtime(uint8_t x) {
@@ -288,23 +305,23 @@ __device__ static uint8_t xtime(uint8_t x) {
 __device__ static void MixColumns(state_t* state) {
     uint8_t i;
     uint8_t Tmp, Tm, t;
-    i = threadIdx.y;
-    // for (i = 0; i < 4; ++i) {
-    t = (*state)[i][0];
-    Tmp = (*state)[i][0] ^ (*state)[i][1] ^ (*state)[i][2] ^ (*state)[i][3];
-    Tm = (*state)[i][0] ^ (*state)[i][1];
-    Tm = xtime(Tm);
-    (*state)[i][0] ^= Tm ^ Tmp;
-    Tm = (*state)[i][1] ^ (*state)[i][2];
-    Tm = xtime(Tm);
-    (*state)[i][1] ^= Tm ^ Tmp;
-    Tm = (*state)[i][2] ^ (*state)[i][3];
-    Tm = xtime(Tm);
-    (*state)[i][2] ^= Tm ^ Tmp;
-    Tm = (*state)[i][3] ^ t;
-    Tm = xtime(Tm);
-    (*state)[i][3] ^= Tm ^ Tmp;
-    //}
+#pragma unroll(4)
+    for (i = 0; i < 4; ++i) {
+        t = (*state)[i][0];
+        Tmp = (*state)[i][0] ^ (*state)[i][1] ^ (*state)[i][2] ^ (*state)[i][3];
+        Tm = (*state)[i][0] ^ (*state)[i][1];
+        Tm = xtime(Tm);
+        (*state)[i][0] ^= Tm ^ Tmp;
+        Tm = (*state)[i][1] ^ (*state)[i][2];
+        Tm = xtime(Tm);
+        (*state)[i][1] ^= Tm ^ Tmp;
+        Tm = (*state)[i][2] ^ (*state)[i][3];
+        Tm = xtime(Tm);
+        (*state)[i][2] ^= Tm ^ Tmp;
+        Tm = (*state)[i][3] ^ t;
+        Tm = xtime(Tm);
+        (*state)[i][3] ^= Tm ^ Tmp;
+    }
 }
 
 // Multiply is used to multiply numbers in the field GF(2^8)
@@ -344,47 +361,64 @@ static uint8_t getSBoxInvert(uint8_t num)
 __device__ static void InvMixColumns(state_t* state) {
     uint8_t i;
     uint8_t a, b, c, d;
-    i = threadIdx.y;
-    // for (i = 0; i < 4; ++i) {
-    a = (*state)[i][0];
-    b = (*state)[i][1];
-    c = (*state)[i][2];
-    d = (*state)[i][3];
+#pragma unroll(4)
+    for (i = 0; i < 4; ++i) {
+        a = (*state)[i][0];
+        b = (*state)[i][1];
+        c = (*state)[i][2];
+        d = (*state)[i][3];
 
-    (*state)[i][0] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
-    (*state)[i][1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
-    (*state)[i][2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
-    (*state)[i][3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
-    //}
+        (*state)[i][0] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
+        (*state)[i][1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
+        (*state)[i][2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
+        (*state)[i][3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
+    }
 }
 
 // The SubBytes Function Substitutes the values in the
 // state matrix with values in an S-box.
 __device__ static void InvSubBytes(state_t* state) {
     uint8_t i, j;
-    j = threadIdx.y;
-    i = threadIdx.x;
-    /*for (i = 0; i < 4; ++i) {
+#pragma unroll(4)
+    for (i = 0; i < 4; ++i) {
         for (j = 0; j < 4; ++j) {
-            (*state)[j][i] = getSBoxInvert((*state)[j][i]);
+            (*state)[i][j] = getSBoxInvert((*state)[i][j]);
         }
-    }*/
-    (*state)[j][i] = getSBoxInvert((*state)[j][i]);
+    }
 }
 
-__device__ static void InvShiftRows(state_t* state, state_t* original_state) {
-    uint8_t i, j;
-    i = threadIdx.x;
-    j = threadIdx.y;
+__device__ static void InvShiftRows(state_t* state) {
+    uint8_t temp;
 
-    (*state)[j][i] = (*original_state)[(j - i + 4) % 4][i];
+    // Rotate first row 1 columns to right
+    temp = (*state)[3][1];
+    (*state)[3][1] = (*state)[2][1];
+    (*state)[2][1] = (*state)[1][1];
+    (*state)[1][1] = (*state)[0][1];
+    (*state)[0][1] = temp;
+
+    // Rotate second row 2 columns to right
+    temp = (*state)[0][2];
+    (*state)[0][2] = (*state)[2][2];
+    (*state)[2][2] = temp;
+
+    temp = (*state)[1][2];
+    (*state)[1][2] = (*state)[3][2];
+    (*state)[3][2] = temp;
+
+    // Rotate third row 3 columns to right
+    temp = (*state)[0][3];
+    (*state)[0][3] = (*state)[1][3];
+    (*state)[1][3] = (*state)[2][3];
+    (*state)[2][3] = (*state)[3][3];
+    (*state)[3][3] = temp;
 }
 #endif  // #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)
 
 // Cipher is the main function that encrypts the PlainText.
 __device__ static void Cipher(state_t* state, const uint8_t* RoundKey) {
     uint8_t round = 0;
-    __shared__ uint8_t original_state[AES_BLOCKLEN];
+    //__shared__ uint8_t original_state[AES_BLOCKLEN];
     // Add the First round key to the state before starting the rounds.
     AddRoundKey(0, state, RoundKey);
 
@@ -394,9 +428,9 @@ __device__ static void Cipher(state_t* state, const uint8_t* RoundKey) {
     // Last one without MixColumns()
     for (round = 1;; ++round) {
         SubBytes(state);
-        original_state[threadIdx.y * 4 + threadIdx.x] = (*state)[threadIdx.y][threadIdx.x];
+        // original_state[threadIdx.y * 4 + threadIdx.x] = (*state)[threadIdx.y][threadIdx.x];
         //__syncthreads();
-        ShiftRows(state, (state_t*)original_state);
+        ShiftRows(state);
         if (round == Nr) {
             break;
         }
@@ -411,7 +445,7 @@ __device__ static void Cipher(state_t* state, const uint8_t* RoundKey) {
 #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)
 __device__ static void InvCipher(state_t* state, const uint8_t* RoundKey) {
     uint8_t round = 0;
-    __shared__ uint8_t original_state[AES_BLOCKLEN];
+    //__shared__ uint8_t original_state[AES_BLOCKLEN];
     // Add the First round key to the state before starting the rounds.
     AddRoundKey(Nr, state, RoundKey);
 
@@ -420,9 +454,9 @@ __device__ static void InvCipher(state_t* state, const uint8_t* RoundKey) {
     // These Nr rounds are executed in the loop below.
     // Last one without InvMixColumn()
     for (round = (Nr - 1);; --round) {
-        original_state[threadIdx.y * 4 + threadIdx.x] = (*state)[threadIdx.y][threadIdx.x];
+        // original_state[threadIdx.y * 4 + threadIdx.x] = (*state)[threadIdx.y][threadIdx.x];
         //__syncthreads();
-        InvShiftRows(state, (state_t*)original_state);
+        InvShiftRows(state);
         InvSubBytes(state);
         AddRoundKey(round, state, RoundKey);
         if (round == 0) {
@@ -438,62 +472,71 @@ __device__ static void InvCipher(state_t* state, const uint8_t* RoundKey) {
 /*****************************************************************************/
 #if defined(ECB) && (ECB == 1)
 
-__global__ void AES_ECB_encrypt_kernel(struct AES_ctx* ctx, uint8_t* buf) {
-    int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-    int threadId = threadIdx.y * 4 + threadIdx.x;
+__global__ void AES_ECB_encrypt_kernel(struct AES_ctx* ctx, uint8_t* buf, size_t length) {
+    int blockId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (blockId >= length) return;
 
-    int blockStart = blockId * AES_BLOCKLEN;  // Start index of the block in the buffer
-    int idx = blockStart + threadId;
+    int idx = blockId * AES_BLOCKLEN;
+    //__shared__ uint8_t shared_buf[AES_BLOCKLEN * THREADS_PER_BLOCK];
+    // uint8_t RoundKey[AES_keyExpSize];
+    uint8_t buffer[AES_BLOCKLEN];
 
-    __shared__ uint8_t RoundKey[AES_keyExpSize];
-    __shared__ uint8_t buffer[AES_BLOCKLEN];
-    buffer[threadId] = buf[idx];
 #pragma unroll(16)
     for (int i = 0; i < AES_BLOCKLEN; i++) {
-        RoundKey[threadId * 11 + i] = ctx->RoundKey[threadId * 11 + i];
+        // RoundKey[threadId * 11 + i] = ctx->RoundKey[threadId * 11 + i];
+        buffer[i] = buf[idx + i];
+        // shared_buf[threadIdx.x + i] = buf[idx + i];
     }
-    //__syncthreads();
 
-    Cipher((state_t*)buffer, RoundKey);
+    Cipher((state_t*)buffer, ctx->RoundKey);
+    // Cipher((state_t*)&shared_buf[threadIdx.x], ctx->RoundKey);
 
-    buf[idx] = buffer[threadId];
+#pragma unroll(16)
+    for (int i = 0; i < AES_BLOCKLEN; i++) {
+        buf[idx + i] = buffer[i];
+        // buf[idx + i] = shared_buf[threadIdx.x + i];
+    }
 }
 
-__global__ void AES_ECB_decrypt_kernel(struct AES_ctx* ctx, uint8_t* buf) {
-    int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-    int threadId = threadIdx.y * 4 + threadIdx.x;
+__global__ void AES_ECB_decrypt_kernel(struct AES_ctx* ctx, uint8_t* buf, size_t length) {
+    int blockId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (blockId >= length) return;
 
-    int blockStart = blockId * AES_BLOCKLEN;  // Start index of the block in the buffer
-    int idx = blockStart + threadId;
+    int idx = blockId * AES_BLOCKLEN;
+    //__shared__ uint8_t shared_buf[AES_BLOCKLEN * THREADS_PER_BLOCK];
+    // uint8_t RoundKey[AES_keyExpSize];
+    uint8_t buffer[AES_BLOCKLEN];
 
-    __shared__ uint8_t RoundKey[AES_keyExpSize];
-    __shared__ uint8_t buffer[AES_BLOCKLEN];
-    buffer[threadId] = buf[idx];
 #pragma unroll(16)
     for (int i = 0; i < AES_BLOCKLEN; i++) {
-        RoundKey[threadId * 11 + i] = ctx->RoundKey[threadId * 11 + i];
+        // RoundKey[threadId * 11 + i] = ctx->RoundKey[threadId * 11 + i];
+        buffer[i] = buf[idx + i];
+        // shared_buf[threadIdx.x + i] = buf[idx + i];
     }
-    //__syncthreads();
 
-    InvCipher((state_t*)buffer, RoundKey);
+    InvCipher((state_t*)buffer, ctx->RoundKey);
 
-    buf[idx] = buffer[threadId];
+#pragma unroll(16)
+    for (int i = 0; i < AES_BLOCKLEN; i++) {
+        // buf[idx + i] = (shared_buf[threadIdx.x + i] ^ buffer[i]);
+        buf[idx + i] = buffer[i];
+    }
 }
 
 void AES_ECB_encrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t length) {
     // Set up device memory
     uint8_t* d_buf;
-    cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
-    cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     struct AES_ctx* d_ctx;
+    cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
     cudaMalloc((void**)&d_ctx, sizeof(struct AES_ctx));
+    cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_ctx, ctx, sizeof(struct AES_ctx), cudaMemcpyHostToDevice);
 
-    int block_size = 16;
-    int num_blocks = (length + block_size - 1) / block_size;
-    dim3 num_threads(4, 4);
+    int block_size = THREADS_PER_BLOCK * AES_BLOCKLEN;
+    int num_blocks = (length + block_size - 1) / (block_size);
+    dim3 num_threads(THREADS_PER_BLOCK);
 
-    AES_ECB_encrypt_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf);
+    AES_ECB_encrypt_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf, length / AES_BLOCKLEN);
 
     cudaMemcpy(buf, d_buf, length * sizeof(uint8_t), cudaMemcpyDeviceToHost);
 
@@ -505,17 +548,17 @@ void AES_ECB_encrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t leng
 void AES_ECB_decrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t length) {
     // Set up device memory
     uint8_t* d_buf;
-    cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
-    cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     struct AES_ctx* d_ctx;
+    cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
     cudaMalloc((void**)&d_ctx, sizeof(struct AES_ctx));
+    cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_ctx, ctx, sizeof(struct AES_ctx), cudaMemcpyHostToDevice);
 
-    int block_size = 16;
-    int num_blocks = (length + block_size - 1) / block_size;
-    dim3 num_threads(4, 4);
+    int block_size = THREADS_PER_BLOCK * AES_BLOCKLEN;
+    int num_blocks = (length + block_size - 1) / (block_size);
+    dim3 num_threads(THREADS_PER_BLOCK);
 
-    AES_ECB_decrypt_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf);
+    AES_ECB_decrypt_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf, length / AES_BLOCKLEN);
 
     cudaMemcpy(buf, d_buf, length * sizeof(uint8_t), cudaMemcpyDeviceToHost);
 
@@ -575,59 +618,56 @@ void AES_CBC_decrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, size_t length) {
 
 #if defined(CTR) && (CTR == 1)
 
-__global__ void AES_CTR_kernel(struct AES_ctx* ctx, uint8_t* buf) {
-    int blockId = blockIdx.x + blockIdx.y * gridDim.x;
-    int threadId = threadIdx.y * 4 + threadIdx.x;
+__global__ void AES_CTR_kernel(struct AES_ctx* ctx, uint8_t* buf, size_t length) {
+    int blockId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (blockId >= length) return;
 
-    int blockStart = blockId * AES_BLOCKLEN;  // Start index of the block in the buffer
-    int idx = blockStart + threadId;
+    int idx = blockId * AES_BLOCKLEN;
+    //__shared__ uint8_t shared_buf[AES_BLOCKLEN * THREADS_PER_BLOCK];
+    // uint8_t RoundKey[AES_keyExpSize];
+    uint8_t buffer[AES_BLOCKLEN];
 
-    register uint8_t buf_idx = buf[idx];
-    __shared__ uint8_t RoundKey[AES_keyExpSize];
-    __shared__ uint8_t buffer[AES_BLOCKLEN];
-    buffer[threadId] = ctx->Iv[threadId];
 #pragma unroll(16)
     for (int i = 0; i < AES_BLOCKLEN; i++) {
-        RoundKey[threadId * 11 + i] = ctx->RoundKey[threadId * 11 + i];
+        // RoundKey[threadId * 11 + i] = ctx->RoundKey[threadId * 11 + i];
+        buffer[i] = ctx->Iv[i];
+        // shared_buf[threadIdx.x + i] = buf[idx + i];
     }
-    //__syncthreads();
 
-    //  Only one thread in each block handles the increment of IV
-    if (threadId == 0) {
-        int num = blockId;
-        for (int i = (AES_BLOCKLEN - 1); i >= 0; i--) {
-            int sum = buffer[i] + num;
-            buffer[i] = sum % 256;
-            num = sum / 256;
-            if (num < 1) {
-                break;
-            }
+    int num = blockId;
+    for (int i = (AES_BLOCKLEN - 1); i >= 0; i--) {
+        int sum = buffer[i] + num;
+        buffer[i] = sum % 256;
+        num = sum / 256;
+        if (num < 1) {
+            break;
         }
     }
 
-    // Other threads in the block wait
-    __syncthreads();
+    Cipher((state_t*)buffer, ctx->RoundKey);
 
-    Cipher((state_t*)buffer, RoundKey);
-
-    buf[idx] = (buf_idx ^ buffer[idx % AES_BLOCKLEN]);
+#pragma unroll(16)
+    for (int i = 0; i < AES_BLOCKLEN; i++) {
+        // buf[idx + i] = (shared_buf[threadIdx.x + i] ^ buffer[i]);
+        buf[idx + i] = (buf[idx + i] ^ buffer[i]);
+    }
 }
 
 /* Symmetrical operation: same function for encrypting as for decrypting. Note any IV/nonce should never be reused with the same key */
 void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, size_t length) {
     // Set up device memory
     uint8_t* d_buf;
-    cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
-    cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     struct AES_ctx* d_ctx;
+    cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
     cudaMalloc((void**)&d_ctx, sizeof(struct AES_ctx));
+    cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_ctx, ctx, sizeof(struct AES_ctx), cudaMemcpyHostToDevice);
 
-    int block_size = 16;
-    int num_blocks = (length + block_size - 1) / block_size;
-    dim3 num_threads(4, 4);
-
-    AES_CTR_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf);
+    int block_size = THREADS_PER_BLOCK * AES_BLOCKLEN;
+    int num_blocks = (length + block_size - 1) / (block_size);
+    dim3 num_threads(THREADS_PER_BLOCK);
+    printf("num_blocks = %d\n", num_blocks);
+    AES_CTR_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf, length / AES_BLOCKLEN);
 
     cudaMemcpy(buf, d_buf, length * sizeof(uint8_t), cudaMemcpyDeviceToHost);
 

@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     }
 
     exit = encrypt(buffer, Nstate, "ECB");
-    // exit = decrypt(buffer, Nstate, "ECB");
+    //  exit = decrypt(buffer, Nstate, "ECB");
     // exit = encrypt(buffer, Nstate, "CTR");
     // exit = decrypt(buffer, Nstate, "CTR");
     file_output(buffer, Nstate * AES_BLOCKLEN, argv[2]);
