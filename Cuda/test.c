@@ -71,8 +71,10 @@ int main(int argc, char** argv) {
         for (int i = fsize; i < Nstate * AES_BLOCKLEN; i++) buffer[i] = Npad;
     }
 
-    exit = encrypt(buffer, Nstate, "CTR");
+    exit = encrypt(buffer, Nstate, "ECB");
     // exit = decrypt(buffer, Nstate, "ECB");
+    // exit = encrypt(buffer, Nstate, "CTR");
+    // exit = decrypt(buffer, Nstate, "CTR");
     file_output(buffer, Nstate * AES_BLOCKLEN, argv[2]);
 
     free(buffer);
@@ -92,13 +94,8 @@ static int encrypt(uint8_t* buffer, int Nstate, char* mode) {
         printf("Encrypt in ECB\n");
         struct AES_ctx ctx;
         AES_init_ctx(&ctx, key);
-#ifdef PARALLEL_BLOCKS
-        for (int i = rank; i < Nstate; i += size) {
-#else
-        for (int i = 0; i < Nstate; i++) {
-#endif
-            // AES_ECB_encrypt(&ctx, buffer + i * AES_BLOCKLEN);
-        }
+        AES_ECB_encrypt_buffer(&ctx, buffer, Nstate * AES_BLOCKLEN);
+
         printf("Finish ECB encryption\n");
         return 0;
     } else if (strcmp(mode, "CTR") == 0) {
@@ -122,14 +119,8 @@ static int decrypt(uint8_t* buffer, int Nstate, char* mode) {
         struct AES_ctx ctx;
 
         AES_init_ctx(&ctx, key);
-#ifdef PARALLEL_BLOCKS
-        for (int i = rank; i < Nstate; i += size) {
-#else
-        for (int i = 0; i < Nstate; i++) {
-#endif
+        AES_ECB_decrypt_buffer(&ctx, buffer, Nstate * AES_BLOCKLEN);
 
-            // AES_ECB_decrypt(&ctx, buffer + i * AES_BLOCKLEN);
-        }
         printf("Finish ECB decryption\n");
         return 0;
     } else if (strcmp(mode, "CTR") == 0) {
