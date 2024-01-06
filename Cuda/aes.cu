@@ -152,6 +152,18 @@ static const uint8_t Rcon[11] = {
 /*****************************************************************************/
 /* Private functions:                                                        */
 /*****************************************************************************/
+double cpu_timing(timespec start, timespec end) {
+    struct timespec temp;
+    if ((end.tv_nsec - start.tv_nsec) < 0) {
+        temp.tv_sec = end.tv_sec - start.tv_sec - 1;
+        temp.tv_nsec = 1000000000 + end.tv_nsec - start.tv_nsec;
+    } else {
+        temp.tv_sec = end.tv_sec - start.tv_sec;
+        temp.tv_nsec = end.tv_nsec - start.tv_nsec;
+    }
+    return (temp.tv_sec + (double)temp.tv_nsec / 1000000000.0);
+}
+
 /*
 static uint8_t getSBoxValue(uint8_t num)
 {
@@ -529,18 +541,39 @@ void AES_ECB_encrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t leng
     struct AES_ctx* d_ctx;
     cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
     cudaMalloc((void**)&d_ctx, sizeof(struct AES_ctx));
+    struct timespec start1, end;
+    cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_ctx, ctx, sizeof(struct AES_ctx), cudaMemcpyHostToDevice);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nMemcpy Host to Device: %f\n", cpu_timing(start1, end));
 
     int block_size = THREADS_PER_BLOCK * AES_BLOCKLEN;
     int num_blocks = (length + block_size - 1) / (block_size);
     dim3 num_threads(THREADS_PER_BLOCK);
 
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
     AES_ECB_encrypt_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf, length / AES_BLOCKLEN);
+    cudaEventRecord(stop);
 
+    cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     cudaMemcpy(buf, d_buf, length * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("Memcpy Device to Host: %f\n", cpu_timing(start1, end));
 
-    //  Free device memory
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    float in_sec = milliseconds / 1000;
+    printf("Kernel elapsed time: %f\n", in_sec);
+    printf("GPU encryption throughput: %f Gbps\n\n", length / in_sec / 1024 / 1024 / 1024);
+
     cudaFree(d_buf);
     cudaFree(d_ctx);
 }
@@ -551,18 +584,39 @@ void AES_ECB_decrypt_buffer(const struct AES_ctx* ctx, uint8_t* buf, size_t leng
     struct AES_ctx* d_ctx;
     cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
     cudaMalloc((void**)&d_ctx, sizeof(struct AES_ctx));
+    struct timespec start1, end;
+    cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_ctx, ctx, sizeof(struct AES_ctx), cudaMemcpyHostToDevice);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nMemcpy Host to Device: %f\n", cpu_timing(start1, end));
 
     int block_size = THREADS_PER_BLOCK * AES_BLOCKLEN;
     int num_blocks = (length + block_size - 1) / (block_size);
     dim3 num_threads(THREADS_PER_BLOCK);
 
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
     AES_ECB_decrypt_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf, length / AES_BLOCKLEN);
+    cudaEventRecord(stop);
 
+    cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     cudaMemcpy(buf, d_buf, length * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("Memcpy Device to Host: %f\n", cpu_timing(start1, end));
 
-    //  Free device memory
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    float in_sec = milliseconds / 1000;
+    printf("Kernel elapsed time: %f\n", in_sec);
+    printf("GPU decryption throughput: %f Gbps\n\n", length / in_sec / 1024 / 1024 / 1024);
+
     cudaFree(d_buf);
     cudaFree(d_ctx);
 }
@@ -660,18 +714,39 @@ void AES_CTR_xcrypt_buffer(struct AES_ctx* ctx, uint8_t* buf, size_t length) {
     struct AES_ctx* d_ctx;
     cudaMalloc((void**)&d_buf, length * sizeof(uint8_t));
     cudaMalloc((void**)&d_ctx, sizeof(struct AES_ctx));
+    struct timespec start1, end;
+    cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     cudaMemcpy(d_buf, buf, length * sizeof(uint8_t), cudaMemcpyHostToDevice);
     cudaMemcpy(d_ctx, ctx, sizeof(struct AES_ctx), cudaMemcpyHostToDevice);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("\nMemcpy Host to Device: %f\n", cpu_timing(start1, end));
 
     int block_size = THREADS_PER_BLOCK * AES_BLOCKLEN;
     int num_blocks = (length + block_size - 1) / (block_size);
     dim3 num_threads(THREADS_PER_BLOCK);
-    printf("num_blocks = %d\n", num_blocks);
+    // printf("num_blocks = %d\n", num_blocks);
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
     AES_CTR_kernel<<<num_blocks, num_threads>>>(d_ctx, d_buf, length / AES_BLOCKLEN);
+    cudaEventRecord(stop);
 
+    cudaDeviceSynchronize();
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     cudaMemcpy(buf, d_buf, length * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("Memcpy Device to Host: %f\n", cpu_timing(start1, end));
 
-    //  Free device memory
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    float in_sec = milliseconds / 1000;
+    printf("Kernel elapsed time: %f\n", in_sec);
+    printf("GPU encryption/decryption throughput: %f Gbps\n\n", length / in_sec / 1024 / 1024 / 1024);
+
     cudaFree(d_buf);
     cudaFree(d_ctx);
 }
