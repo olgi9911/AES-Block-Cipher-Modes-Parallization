@@ -1,7 +1,7 @@
 CC:=mpicc
 exe:=test
 obj:=test.o aes.o fileio
-CFLAGS = -lm -O3 -fopenmp
+CFLAGS = -fopenmp
 # all:$(obj)
 #  $(CC) -o $(exe) $(obj)  
 test: test.o aes.o

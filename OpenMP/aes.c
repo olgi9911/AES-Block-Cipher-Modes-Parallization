@@ -38,6 +38,7 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 #include <string.h> // CBC mode, for memset
 #include <stdio.h>
 #include <omp.h>
+#include <mpi.h>
 #include "aes.h"
 
 /*****************************************************************************/
@@ -45,7 +46,7 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 /*****************************************************************************/
 // The number of columns comprising a state in AES. This is a constant in AES. Value=4
 #define Nb 4
-#define PARALLEL 1  // A flag to determine which version to use (OpenMP version if defined, serial version if not defined)
+// #define PARALLEL 1  // A flag to determine which version to use (OpenMP version if defined, serial version if not defined)
 
 #if defined(AES256) && (AES256 == 1)
     #define Nk 8
@@ -345,6 +346,9 @@ static void ShiftRows(state_t* state)
 #else
   // OpenMP Ver.
   state_t tmp;
+  // extern int rank;
+  // double tt1, tt2;
+  // tt1 = omp_get_wtime();
 #pragma omp parallel num_threads(4)
 {
   int tid = omp_get_thread_num();
@@ -363,6 +367,8 @@ static void ShiftRows(state_t* state)
     }
   }
 }
+  // tt2 = omp_get_wtime();
+  // printf("Rank %d: Shift Rows %f s\n", rank, tt2-tt1);
 #endif
 }
 
@@ -374,6 +380,7 @@ static uint8_t xtime(uint8_t x)
 // MixColumns function mixes the columns of the state matrix
 static void MixColumns(state_t* state)
 {
+  
   uint8_t i;
   uint8_t Tmp, Tm, t;
 #ifndef PARALLEL
@@ -548,8 +555,8 @@ static void InvShiftRows(state_t* state)
       (*state)[j][i] = tmp[(j-i+4)%4][i];
     }
   }
-#endif
 }
+#endif
 }
 #endif // #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)
 
@@ -560,6 +567,12 @@ double sb_start, sb_end, sb_sum=0.0,
 // Cipher is the main function that encrypts the PlainText.
 static void Cipher(state_t* state, const uint8_t* RoundKey)
 {
+  // extern int rank;
+  // double t1, t2;
+  // t1 = omp_get_wtime();
+  // MPI_Barrier(MPI_COMM_WORLD);
+  // t2 = omp_get_wtime();
+  // printf("Rank %d waited for %f seconds\n", rank, t2-t1);
   uint8_t round = 0;
   /* Timing variables */
   
@@ -568,7 +581,7 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
   AddRoundKey(0, state, RoundKey);
   ark_end = omp_get_wtime();
   ark_sum += ark_end - ark_start;
-  // printf("Work took %f seconds\n", ark_sum);
+  // printf("ARK took %f seconds\n", ark_sum);
 
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
@@ -605,6 +618,7 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
   ark_end = omp_get_wtime();
   ark_sum += ark_end - ark_start;
 }
+
 
 #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)
 static void InvCipher(state_t* state, const uint8_t* RoundKey)
