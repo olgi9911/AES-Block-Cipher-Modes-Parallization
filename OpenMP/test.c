@@ -13,7 +13,7 @@
 #define ECB 1
 #define PARALLEL_BLOCKS 1   // A flag, when defined, encrypt/decrypt the cipher blocks in parallel
 // #define TEST_CORRECTNESS 1  // A flag which when defined, run the original correctness check on the AES instead of encrypting selected file
-char mode[] = "ECB";
+// char mode[] = "ECB";
 int rank=0, size=1;
 static void phex(uint8_t* str);
 static int test_encrypt_cbc(void);
@@ -56,8 +56,8 @@ int main(int argc, char **argv)
 #endif */
 
 #ifndef TEST_CORRECTNESS
-    if(argc != 3) {
-        printf("argc should be 3 (./test input_file output_file) instead of %d\n",argc);
+    if(argc != 4) {
+        printf("argc should be 4 (./test input_file output_file mode) instead of %d\n",argc);
         return 1;
     }
     /* MPI Initialization */
@@ -93,7 +93,7 @@ int main(int argc, char **argv)
     }
     // }
 
-    printf("Rank %d: (%d,%d), total %d states\n", rank, start, end, noSubArray);
+    // printf("Rank %d: (%d,%d), total %d states\n", rank, start, end, noSubArray);
 #endif
     uint8_t *buffer = (uint8_t*) calloc(Nstate*AES_BLOCKLEN,sizeof(uint8_t));
     if(rank == 0) printf("File size = %d bytes, %d states\n",fsize,Nstate);
@@ -124,11 +124,11 @@ int main(int argc, char **argv)
 #ifdef PARALLEL_BLOCKS
     // MPI_Barrier(MPI_COMM_WORLD);
     encrypt_start = omp_get_wtime();
-    exit = encrypt(buffer, Nstate, mode, start, end);
+    exit = encrypt(buffer, Nstate, argv[3], start, end);
     encrypt_end = omp_get_wtime();
     
     // MPI_Barrier(MPI_COMM_WORLD);
-    // exit = decrypt(buffer, Nstate, mode, start, end);
+    // exit = decrypt(buffer, Nstate, argv[3], start, end);
 
     uint8_t *result = rank == 0 ? (uint8_t*) malloc(Nstate*AES_BLOCKLEN*sizeof(uint8_t)) : 0;
     comm_start = omp_get_wtime();
@@ -137,10 +137,10 @@ int main(int argc, char **argv)
     
     if(rank==0) file_output(result, Nstate*AES_BLOCKLEN, argv[2]);
 #else
-    // exit = encrypt(buffer, Nstate, "ECB", -1, -1);
-    // exit = decrypt(buffer, Nstate, "ECB", -1, -1);
-    exit = encrypt(buffer, Nstate, "CTR", -1, -1);
-    exit = decrypt(buffer, Nstate, "CTR", -1, -1);
+    encrypt_start = omp_get_wtime();
+    exit = encrypt(buffer, Nstate, mode, -1, -1);
+    encrypt_end = omp_get_wtime();
+    // exit = decrypt(buffer, Nstate, "CTR", -1, -1);
     file_output(buffer, Nstate*AES_BLOCKLEN, argv[2]);
 #endif
     
@@ -178,7 +178,7 @@ static int encrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end){
     uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
     extern double ark_sum, sb_sum, sr_sum, mc_sum;
     if(strcmp(mode, "ECB") == 0){
-        printf("Encrypt in ECB\n");
+        if(rank==0) printf("Encrypt in ECB\n");
         struct AES_ctx ctx;
         AES_init_ctx(&ctx, key);
 #ifdef PARALLEL_BLOCKS
@@ -193,72 +193,80 @@ static int encrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end){
         }
     }
     else if(strcmp(mode, "CTR") == 0){
-        printf("Encrypt in CTR\n");
+        if(rank==0) printf("Encrypt in CTR\n");
         uint8_t iv[16]  = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
         struct AES_ctx ctx;
     
         AES_init_ctx_iv(&ctx, key, iv);
         
 #ifdef PARALLEL_BLOCKS
+        uint8_t *bf = buffer+start*AES_BLOCKLEN*sizeof(uint8_t);
         for(int i=start;i<end;i++){
 #else
+        uint8_t *bf = buffer;
         for(int i=0;i<Nstate;i++){
 #endif
-            AES_CTR_xcrypt_buffer_p(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t), i);
+            AES_ECB_encrypt(&ctx, bf);
+            bf += AES_BLOCKLEN*sizeof(uint8_t);
+            // AES_CTR_xcrypt_buffer_p(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t), i);
         }
     }
     else {return 1;}
 
-    printf("Rank %d Total Time (s): %f\n\
+    MPI_Barrier(MPI_COMM_WORLD);
+    if(rank==0) printf("Finish %s encryption\n",mode);
+    /* printf("Rank %d Total Time (s): %f\n\
             Add Round Key:  %f\n\
             Sub Bytes:      %f\n\
             Mix Column:     %f\n\
             Shift Row:      %f\n", rank, ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
-    printf("Finish %s encryption\n",mode);
+     */
     return 0;
 }
 
 static int decrypt(uint8_t *buffer,int Nstate, char* mode, int start, int end){
     uint8_t key[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
     if(strcmp(mode, "ECB") == 0){
-        printf("Decrypt in ECB\n");
+        if(rank==0) printf("Decrypt in ECB\n");
         struct AES_ctx ctx;
 
         AES_init_ctx(&ctx, key);
 #ifdef PARALLEL_BLOCKS
+        uint8_t *bf = buffer+start*AES_BLOCKLEN*sizeof(uint8_t);
         for(int i=start;i<end;i++){
 #else
+        uint8_t *bf = buffer;
         for(int i=0;i<Nstate;i++){
 #endif
         
-            AES_ECB_decrypt(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t));
+            // AES_ECB_decrypt(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t));
+            AES_ECB_decrypt(&ctx, bf);
+            bf += AES_BLOCKLEN*sizeof(uint8_t);
         }
-        printf("Finish ECB decryption\n");
-        return 0;
     }
     else if(strcmp(mode, "CTR") == 0){
-        printf("Decrypt in CTR\n");
+        if(rank==0) printf("Decrypt in CTR\n");
         uint8_t iv[16]  = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
         struct AES_ctx ctx;
     
         AES_init_ctx_iv(&ctx, key, iv);
         
 #ifdef PARALLEL_BLOCKS
+        uint8_t *bf = buffer+start*AES_BLOCKLEN*sizeof(uint8_t);
         for(int i=start;i<end;i++){
-#else
+#else   
+        uint8_t *bf = buffer;
         for(int i=0;i<Nstate;i++){
 #endif
-            AES_CTR_xcrypt_buffer_p(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t), i);
+            AES_ECB_decrypt(&ctx, bf);
+            bf += AES_BLOCKLEN*sizeof(uint8_t);
+            // AES_CTR_xcrypt_buffer_p(&ctx, buffer+i*AES_BLOCKLEN*sizeof(uint8_t), i);
         }
     }
     else {return 1;}
 
-    // printf("Total Time (s): %f\n\
-    //         Add Round Key:  %f\n\
-    //         Sub Bytes:      %f\n\
-    //         Mix Column:     %f\n\
-    //         Shift Row:      %f\n", ark_sum+sb_sum+sr_sum+mc_sum, ark_sum, sb_sum, mc_sum, sr_sum);
-    printf("Finish %s decryption\n",mode);
+    MPI_Barrier(MPI_COMM_WORLD);
+    if(rank==0) printf("Finish %s decryption\n",mode);
     return 0;
 }
 

@@ -567,12 +567,6 @@ double sb_start, sb_end, sb_sum=0.0,
 // Cipher is the main function that encrypts the PlainText.
 static void Cipher(state_t* state, const uint8_t* RoundKey)
 {
-  // extern int rank;
-  // double t1, t2;
-  // t1 = omp_get_wtime();
-  // MPI_Barrier(MPI_COMM_WORLD);
-  // t2 = omp_get_wtime();
-  // printf("Rank %d waited for %f seconds\n", rank, t2-t1);
   uint8_t round = 0;
   /* Timing variables */
   
@@ -581,7 +575,6 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
   AddRoundKey(0, state, RoundKey);
   ark_end = omp_get_wtime();
   ark_sum += ark_end - ark_start;
-  // printf("ARK took %f seconds\n", ark_sum);
 
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
