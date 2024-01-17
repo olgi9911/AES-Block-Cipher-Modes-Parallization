@@ -28,6 +28,10 @@
 //#define AES192 1
 //#define AES256 1
 
+#define PARALLEL_BLOCKS 1       // A flag, when defined, encrypt/decrypt the cipher blocks in parallel
+// #define TEST_CORRECTNESS 1   // A flag, when defined, run the original correctness check on the AES instead of encrypting the selected file
+// #define PARALLEL 1           // A flag, when defined, parallelize internal functions of AES with OpenMP
+
 #define AES_BLOCKLEN 16 // Block length in bytes - AES is 128b block only
 
 #if defined(AES256) && (AES256 == 1)

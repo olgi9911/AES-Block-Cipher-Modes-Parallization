@@ -46,7 +46,6 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 /*****************************************************************************/
 // The number of columns comprising a state in AES. This is a constant in AES. Value=4
 #define Nb 4
-// #define PARALLEL 1  // A flag to determine which version to use (OpenMP version if defined, serial version if not defined)
 
 #if defined(AES256) && (AES256 == 1)
     #define Nk 8
@@ -251,7 +250,10 @@ void AES_ctx_set_iv(struct AES_ctx* ctx, const uint8_t* iv)
 static void AddRoundKey(uint8_t round, state_t* state, const uint8_t* RoundKey)
 {
   uint8_t i,j;
-#ifndef PARALLEL
+#ifdef PARALLEL
+  // OpenMP Ver.
+#pragma omp parallel for collapse(2)
+#endif
   // Serial Ver.
   for (i = 0; i < 4; ++i)
   {
@@ -260,17 +262,6 @@ static void AddRoundKey(uint8_t round, state_t* state, const uint8_t* RoundKey)
       (*state)[i][j] ^= RoundKey[(round * Nb * 4) + (i * Nb) + j];
     }
   }
-#else
-  // OpenMP Ver.
-#pragma omp parallel for collapse(2)
-  for (i = 0; i < 4; ++i)
-  {
-    for (j = 0; j < 4; ++j)
-    {
-      (*state)[i][j] ^= RoundKey[(round * Nb * 4) + (i * Nb) + j];
-    }
-  }
-#endif
 }
 
 // The SubBytes Function Substitutes the values in the
@@ -278,7 +269,10 @@ static void AddRoundKey(uint8_t round, state_t* state, const uint8_t* RoundKey)
 static void SubBytes(state_t* state)
 {
   uint8_t i, j;
-#ifndef PARALLEL
+#ifdef PARALLEL
+// OpenMP Ver.
+#pragma omp parallel for collapse(2)
+#endif
   // Serial Ver.
   for (i = 0; i < 4; ++i)
   {
@@ -287,17 +281,6 @@ static void SubBytes(state_t* state)
       (*state)[j][i] = getSBoxValue((*state)[j][i]);
     }
   }
-#else
-  // OpenMP Ver.
-#pragma omp parallel for collapse(2)
-  for (i = 0; i < 4; ++i)
-  {
-    for (j = 0; j < 4; ++j)
-    {
-      (*state)[j][i] = getSBoxValue((*state)[j][i]);
-    }
-  }
-#endif
 }
 
 int CmpState(state_t* a, state_t* b){
@@ -319,7 +302,6 @@ int CmpState(state_t* a, state_t* b){
 static void ShiftRows(state_t* state)
 {
   uint8_t temp;
-#ifndef PARALLEL
   // Serial Ver.
   // Rotate first row 1 columns to left  
   temp           = (*state)[0][1];
@@ -343,33 +325,6 @@ static void ShiftRows(state_t* state)
   (*state)[3][3] = (*state)[2][3];
   (*state)[2][3] = (*state)[1][3];
   (*state)[1][3] = temp;
-#else
-  // OpenMP Ver.
-  state_t tmp;
-  // extern int rank;
-  // double tt1, tt2;
-  // tt1 = omp_get_wtime();
-#pragma omp parallel num_threads(4)
-{
-  int tid = omp_get_thread_num();
-  int num_thread = omp_get_num_threads();
-  // printf("tid %d/%d\n",tid,num_thread);
-  tmp[0][tid] = (*state)[0][tid];
-  tmp[1][tid] = (*state)[1][tid];
-  tmp[2][tid] = (*state)[2][tid];
-  tmp[3][tid] = (*state)[3][tid];
-  #pragma omp barrier
-  
-  #pragma omp for collapse(2)
-  for(int i=0;i<4;i++){
-    for(int j=0;j<4;j++){
-      (*state)[j][i] = tmp[(j+i)%4][i];
-    }
-  }
-}
-  // tt2 = omp_get_wtime();
-  // printf("Rank %d: Shift Rows %f s\n", rank, tt2-tt1);
-#endif
 }
 
 static uint8_t xtime(uint8_t x)
@@ -383,20 +338,10 @@ static void MixColumns(state_t* state)
   
   uint8_t i;
   uint8_t Tmp, Tm, t;
-#ifndef PARALLEL
-  // Serial Ver.
-  for (i = 0; i < 4; ++i)
-  {  
-    t   = (*state)[i][0];
-    Tmp = (*state)[i][0] ^ (*state)[i][1] ^ (*state)[i][2] ^ (*state)[i][3] ;
-    Tm  = (*state)[i][0] ^ (*state)[i][1] ; Tm = xtime(Tm);  (*state)[i][0] ^= Tm ^ Tmp ;
-    Tm  = (*state)[i][1] ^ (*state)[i][2] ; Tm = xtime(Tm);  (*state)[i][1] ^= Tm ^ Tmp ;
-    Tm  = (*state)[i][2] ^ (*state)[i][3] ; Tm = xtime(Tm);  (*state)[i][2] ^= Tm ^ Tmp ;
-    Tm  = (*state)[i][3] ^ t ;              Tm = xtime(Tm);  (*state)[i][3] ^= Tm ^ Tmp ;
-  }
-#else
+#ifdef PARALLEL
   // OpenMP Ver.
-#pragma omp parallel for num_threads(4)
+#pragma omp parallel for num_threads(4) private(Tm, t, Tmp)
+#endif
   for (i = 0; i < 4; ++i)
   {  
     t   = (*state)[i][0];
@@ -406,7 +351,6 @@ static void MixColumns(state_t* state)
     Tm  = (*state)[i][2] ^ (*state)[i][3] ; Tm = xtime(Tm);  (*state)[i][2] ^= Tm ^ Tmp ;
     Tm  = (*state)[i][3] ^ t ;              Tm = xtime(Tm);  (*state)[i][3] ^= Tm ^ Tmp ;
   }
-#endif
 }
 
 // Multiply is used to multiply numbers in the field GF(2^8)
@@ -448,7 +392,10 @@ static void InvMixColumns(state_t* state)
 {
   int i;
   uint8_t a, b, c, d;
-#ifndef PARALLEL
+#ifdef PARALLEL
+// OpenMP Ver.
+#pragma omp parallel for num_threads(4) private(a,b,c,d)
+#endif
   // Serial Ver.
   for (i = 0; i < 4; ++i)
   { 
@@ -462,22 +409,6 @@ static void InvMixColumns(state_t* state)
     (*state)[i][2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
     (*state)[i][3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
   }
-#else
-// OpenMP Ver.
-#pragma omp parallel for num_threads(4)
-  for (i = 0; i < 4; ++i)
-  { 
-    a = (*state)[i][0];
-    b = (*state)[i][1];
-    c = (*state)[i][2];
-    d = (*state)[i][3];
-
-    (*state)[i][0] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
-    (*state)[i][1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
-    (*state)[i][2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
-    (*state)[i][3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
-  }
-#endif
 }
 
 
@@ -486,18 +417,10 @@ static void InvMixColumns(state_t* state)
 static void InvSubBytes(state_t* state)
 {
   uint8_t i, j;
-#ifndef PARALLEL
-  // Serial Ver.
-  for (i = 0; i < 4; ++i)
-  {
-    for (j = 0; j < 4; ++j)
-    {
-      (*state)[j][i] = getSBoxInvert((*state)[j][i]);
-    }
-  }
-#else
-    // OpenMP Ver.
+#ifdef PARALLEL
+// OpenMP Ver.
 #pragma omp parallel for collapse(2)
+#endif
   for (i = 0; i < 4; ++i)
   {
     for (j = 0; j < 4; ++j)
@@ -505,7 +428,6 @@ static void InvSubBytes(state_t* state)
       (*state)[j][i] = getSBoxInvert((*state)[j][i]);
     }
   }
-#endif
 }
 
 static void InvShiftRows(state_t* state)
@@ -614,12 +536,19 @@ static void Cipher(state_t* state, const uint8_t* RoundKey)
 
 
 #if (defined(CBC) && CBC == 1) || (defined(ECB) && ECB == 1)
+double d_sb_start, d_sb_end, d_sb_sum=0.0,
+         d_ark_start, d_ark_end, d_ark_sum=0.0,
+         d_sr_start, d_sr_end, d_sr_sum=0.0,
+         d_mc_start, d_mc_end, d_mc_sum=0.0;
 static void InvCipher(state_t* state, const uint8_t* RoundKey)
 {
   uint8_t round = 0;
 
   // Add the First round key to the state before starting the rounds.
+  d_ark_start = omp_get_wtime();
   AddRoundKey(Nr, state, RoundKey);
+  d_ark_end = omp_get_wtime();
+  d_ark_sum += d_ark_end-d_ark_start;
 
   // There will be Nr rounds.
   // The first Nr-1 rounds are identical.
@@ -627,13 +556,27 @@ static void InvCipher(state_t* state, const uint8_t* RoundKey)
   // Last one without InvMixColumn()
   for (round = (Nr - 1); ; --round)
   {
+    d_sr_start = omp_get_wtime();
     InvShiftRows(state);
+    d_sr_end = omp_get_wtime();
+    d_sr_sum += d_sr_end-d_sr_start;
+
+    d_sb_start = omp_get_wtime();
     InvSubBytes(state);
+    d_sb_end = omp_get_wtime();
+    d_sb_sum += d_sb_end-d_sb_start;
+
+    d_ark_start = omp_get_wtime();
     AddRoundKey(round, state, RoundKey);
+    d_ark_end = omp_get_wtime();
+    d_ark_sum += d_ark_end-d_ark_start;
     if (round == 0) {
       break;
     }
+    d_mc_start = omp_get_wtime();
     InvMixColumns(state);
+    d_mc_end = omp_get_wtime();
+    d_mc_sum += d_mc_end-d_mc_start;
   }
 
 }
