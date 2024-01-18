@@ -48,8 +48,8 @@ int main(int argc, char** argv) {
     return 0;
 #endif
 
-    if (argc != 3) {
-        printf("argc should be 3 (./test input_file output_file) instead of %d\n", argc);
+    if(argc != 4) {
+        printf("argc should be 4 (./test input_file output_file mode) instead of %d\n",argc);
         return 1;
     }
 
@@ -71,8 +71,8 @@ int main(int argc, char** argv) {
         for (int i = fsize; i < Nstate * AES_BLOCKLEN; i++) buffer[i] = Npad;
     }
 
-    exit = encrypt(buffer, Nstate, "ECB");
-    // exit = decrypt(buffer, Nstate, "ECB");
+    exit = encrypt(buffer, Nstate, argv[3]);
+    exit = decrypt(buffer, Nstate, argv[3]);
     // printf("------------------------------\n");
     // exit = encrypt(buffer, Nstate, "CTR");
     // exit = decrypt(buffer, Nstate, "CTR");
